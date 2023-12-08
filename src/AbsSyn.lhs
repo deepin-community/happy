@@ -12,20 +12,39 @@ Here is the abstract syntax of the language we parse.
 >       getImportedIdentity, getMonad, getError,
 >       getPrios, getPrioNames, getExpect, getErrorHandlerType,
 >       getAttributes, getAttributetype,
->       Rule,Prod,Term(..)
+>       Rule(..), Prod(..), Term(..), Prec(..)
 >  ) where
 
 > data AbsSyn
 >     = AbsSyn
->         (Maybe String)                                        -- header
->         [Directive String]                                    -- directives
->         [Rule]        -- productions
->         (Maybe String)                                        -- footer
+>         (Maybe String)       -- header
+>         [Directive String]   -- directives
+>         [Rule]               -- productions
+>         (Maybe String)       -- footer
 
-> type Rule     = (String,[String],[Prod],Maybe String)
-> type Prod     = ([Term],String,Int,Maybe String)
-> data Term     = App String [Term]
+> data Rule
+>     = Rule
+>         String               -- name of the rule
+>         [String]             -- parameters (see parametrized productions)
+>         [Prod]               -- productions
+>         (Maybe String)       -- type of the rule
 
+> data Prod
+>     = Prod
+>         [Term]               -- terms that make up the rule
+>         String               -- code body that runs when the rule reduces
+>         Int                  -- line number
+>         Prec                 -- inline precedence annotation for the rule
+
+> data Term
+>     = App
+>         String               -- name of the term
+>         [Term]               -- parameter arguments (usually this is empty)
+
+> data Prec
+>     = PrecNone               -- no user-specified precedence
+>     | PrecShift              -- %shift
+>     | PrecId String          -- %prec ID
 
 
 #ifdef DEBUG
@@ -95,7 +114,7 @@ generate some error messages.
 > getMonad ds
 >       = case [ (True,a,b,c,d) | (TokenMonad a b c d) <- ds ] of
 >               [t] -> t
->               []  -> (False,"()","HappyIdentity",">>=","return")
+>               []  -> (False,"()","HappyIdentity","Prelude.>>=","Prelude.return")
 >               _   -> error "multiple monad directives"
 
 > getTokenSpec :: [Directive t] -> [(t, String)]

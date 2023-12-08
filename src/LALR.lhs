@@ -123,7 +123,7 @@ Generating the closure of a set of LR(1) items
 >                           in
 >                           [ (Lr1 rule' 0 terms) | rule' <- lookupProdsOfName g b ]
 >                       _ -> []
->                   where (_name,lhs,_,_) = lookupProdNo g rule
+>                   where Production _name lhs _ _ = lookupProdNo g rule
 
 Subtract the first set of items from the second.
 
@@ -495,8 +495,8 @@ Generate the action table
 >                  -> let (_,_,_,partial) = starts' !! rule in
 >                     [ (startLookahead g partial, LR'Accept{-'-}) ]
 >                  | otherwise
->                  -> case lookupProdNo g rule of
->                          (_,_,_,p) -> NameSet.toAscList la `zip` repeat (LR'Reduce rule p)
+>                  -> let Production _ _ _ p = lookupProdNo g rule in
+>                     NameSet.toAscList la `zip` repeat (LR'Reduce rule p)
 >               _ -> []
 
 >       possActions goto coll = do item <- closure1 g first coll
@@ -561,6 +561,9 @@ NOTE: on (LR'Multiple as a) handling
 >       res a@(LR'Shift {}) b@(LR'Reduce {}) = res b a
 >       res a@(LR'Reduce _ p) b@(LR'Shift _ p')
 >               = case (p,p') of
+>                      (PrioLowest,PrioLowest) -> LR'MustFail
+>                      (_,PrioLowest) -> a
+>                      (PrioLowest,_) -> b
 >                      (No,_) -> LR'Multiple [a] b      -- shift wins
 >                      (_,No) -> LR'Multiple [a] b      -- shift wins
 >                      (Prio c i, Prio _ j)
@@ -573,6 +576,10 @@ NOTE: on (LR'Multiple as a) handling
 >                                     None       -> LR'MustFail
 >       res a@(LR'Reduce r p) b@(LR'Reduce r' p')
 >               = case (p,p') of
+>                      (PrioLowest,PrioLowest) ->
+>                        LR'Multiple [a] b      -- give to earlier rule?
+>                      (_,PrioLowest) -> a
+>                      (PrioLowest,_) -> b
 >                      (No,_) -> LR'Multiple [a] b      -- give to earlier rule?
 >                      (_,No) -> LR'Multiple [a] b
 >                      (Prio _ i, Prio _ j)
@@ -609,4 +616,4 @@ Count the conflicts
 
 > findRule :: Grammar -> Int -> Int -> Maybe Name
 > findRule g rule dot = listToMaybe (drop dot lhs)
->     where (_,lhs,_,_) = lookupProdNo g rule
+>     where Production _ lhs _ _ = lookupProdNo g rule
