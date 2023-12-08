@@ -9,7 +9,7 @@ Here is our mid-section datatype
 > module Grammar (
 >       Name,
 >
->       Production, Grammar(..), mangler, ErrorHandlerType(..),
+>       Production(..), Grammar(..), mangler, ErrorHandlerType(..),
 >
 >       LRAction(..), ActionTable, Goto(..), GotoTable, Priority(..),
 >       Assoc(..),
@@ -30,11 +30,19 @@ Here is our mid-section datatype
 > import Data.List
 > import Data.Maybe (fromMaybe)
 
-> import Control.Monad.Writer
+> import Control.Monad
+> import Control.Monad.Writer (Writer, mapWriter, runWriter, tell)
 
 > type Name = Int
 
-> type Production = (Name,[Name],(String,[Int]),Priority)
+> data Production
+>       = Production Name [Name] (String,[Int]) Priority
+
+#ifdef DEBUG
+
+>       deriving Show
+
+#endif
 
 > data Grammar
 >       = Grammar {
@@ -70,7 +78,7 @@ Here is our mid-section datatype
 >               , token_specs           = t
 >               , terminals             = ts
 >               , non_terminals         = nts
->               , starts                = starts
+>               , starts                = sts
 >               , types                 = tys
 >               , token_names           = e
 >               , first_nonterm         = fnt
@@ -81,7 +89,7 @@ Here is our mid-section datatype
 >        . showString "\ntoken_specs = "   . shows t
 >        . showString "\nterminals = "     . shows ts
 >        . showString "\nnonterminals = "  . shows nts
->        . showString "\nstarts = "        . shows starts
+>        . showString "\nstarts = "        . shows sts
 >        . showString "\ntypes = "         . shows tys
 >        . showString "\ntoken_names = "   . shows e
 >        . showString "\nfirst_nonterm = " . shows fnt
@@ -99,7 +107,7 @@ Here is our mid-section datatype
 
 #endif
 
-> data Priority = No | Prio Assoc Int
+> data Priority = No | Prio Assoc Int | PrioLowest
 
 #ifdef DEBUG
 
@@ -179,7 +187,7 @@ This bit is a real mess, mainly because of the error message support.
 >   rules <- case expand_rules rules' of
 >              Left err -> addErr err >> return []
 >              Right as -> return as
->   nonterm_strs <- checkRules ([n | (n,_,_) <- rules]) "" []
+>   nonterm_strs <- checkRules [n | Rule1 n _ _ <- rules] "" []
 
 >   let
 
@@ -236,7 +244,7 @@ Start symbols...
 >   let
 >       parser_names   = [ s | TokenName s _ _ <- starts' ]
 >       start_partials = [ b | TokenName _ _ b <- starts' ]
->       start_prods = zipWith (\nm tok -> (nm, [tok], ("no code",[]), No))
+>       start_prods = zipWith (\nm tok -> Production nm [tok] ("no code",[]) No)
 >                        start_names start_toks
 
 Deal with priorities...
@@ -256,7 +264,7 @@ Deal with priorities...
 
 Translate the rules from string to name-based.
 
->       convNT (nt, prods, ty)
+>       convNT (Rule1 nt prods ty)
 >         = do nt' <- mapToName nt
 >              return (nt', prods, ty)
 >
@@ -266,33 +274,37 @@ Translate the rules from string to name-based.
 >       transRule (nt, prods, _ty)
 >         = mapM (finishRule nt) prods
 >
->       finishRule nt (lhs,code,line,prec)
+>       finishRule :: Name -> Prod1 -> Writer [ErrMsg] Production
+>       finishRule nt (Prod1 lhs code line prec)
 >         = mapWriter (\(a,e) -> (a, map (addLine line) e)) $ do
 >           lhs' <- mapM mapToName lhs
 >           code' <- checkCode (length lhs) lhs' nonterm_names code attrs
 >           case mkPrec lhs' prec of
 >               Left s  -> do addErr ("Undeclared precedence token: " ++ s)
->                             return (nt, lhs', code', No)
->               Right p -> return (nt, lhs', code', p)
+>                             return (Production nt lhs' code' No)
+>               Right p -> return (Production nt lhs' code' p)
 >
->       mkPrec :: [Name] -> Maybe String -> Either String Priority
->       mkPrec lhs prio =
->             case prio of
->               Nothing -> case filter (flip elem terminal_names) lhs of
+>       mkPrec :: [Name] -> Prec -> Either String Priority
+>       mkPrec lhs PrecNone =
+>         case filter (flip elem terminal_names) lhs of
 >                            [] -> Right No
 >                            xs -> case lookup (last xs) prios of
 >                                    Nothing -> Right No
 >                                    Just p  -> Right p
->               Just s -> case lookup s prioByString of
+>       mkPrec _ (PrecId s) =
+>         case lookup s prioByString of
 >                           Nothing -> Left s
 >                           Just p -> Right p
+>
+>       mkPrec _ PrecShift = Right PrioLowest
+>
 >   -- in
 
 >   rules1 <- mapM convNT rules
 >   rules2 <- mapM transRule rules1
 
 >   let
->       type_env = [(nt, t) | (nt, _, Just (t,[])) <- rules] ++
+>       type_env = [(nt, t) | Rule1 nt _ (Just (t,[])) <- rules] ++
 >                  [(nt, getTokenType dirs) | nt <- terminal_strs] -- XXX: Doesn't handle $$ type!
 >
 >       fixType (ty,s) = go "" ty
@@ -334,16 +346,16 @@ Get the token specs in terms of Names.
 >   tokspec <- mapM fixTokenSpec (getTokenSpec dirs)
 
 >   let
->          ass = combinePairs [ (a,no)
->                             | ((a,_,_,_),no) <- zip productions' [0..] ]
->          arr = array (firstStartTok, length ass - 1 + firstStartTok) ass
+>      ass = combinePairs [ (a,no)
+>                         | (Production a _ _ _,no) <- zip productions' [0..] ]
+>      arr = array (firstStartTok, length ass - 1 + firstStartTok) ass
 
->          lookup_prods :: Name -> [Int]
->          lookup_prods x | x >= firstStartTok && x < first_t = arr ! x
->          lookup_prods _ = error "lookup_prods"
+>      lookup_prods :: Name -> [Int]
+>      lookup_prods x | x >= firstStartTok && x < first_t = arr ! x
+>      lookup_prods _ = error "lookup_prods"
 >
->          productions' = start_prods ++ concat rules2
->          prod_array  = listArray (0,length productions' - 1) productions'
+>      productions' = start_prods ++ concat rules2
+>      prod_array  = listArray (0,length productions' - 1) productions'
 >   -- in
 
 >   return  (Grammar {
@@ -501,7 +513,7 @@ So is this.
 >                     , attrUpdates
 >                     ]
 >
->        formattedConditions = concat $ intersperse "++" $ localConditions : (map (\i -> "happyConditions_"++(show i)) prods)
+>        formattedConditions = concat $ intersperse " Prelude.++ " $ localConditions : (map (\i -> "happyConditions_"++(show i)) prods)
 >        localConditions = "["++(concat $ intersperse ", " $ map formatCondition conditions)++"]"
 >        formatCondition (Conditional toks) = formatTokens toks
 >        formatCondition _ = error "formatCondition: Not a condition"
